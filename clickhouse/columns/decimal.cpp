@@ -5,9 +5,6 @@ namespace
 using namespace clickhouse;
 
 #ifdef ABSL_HAVE_INTRINSIC_INT128
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wpedantic"
-
 template <typename T>
 inline bool addOverflow(const Int128 & l, const T & r, Int128 * result)
 {
@@ -27,7 +24,6 @@ inline bool mulOverflow(const Int128 & l, const T & r, Int128 * result)
     *result = res;
     return ret_value;
 }
-#pragma GCC diagnostic pop
 
 #else
 template <typename T>
