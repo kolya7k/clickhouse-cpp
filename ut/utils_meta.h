@@ -2,6 +2,8 @@
 
 #include <type_traits>
 #include <array> // for std::begin
+#include <string>
+#include <string_view>
 
 // based on https://stackoverflow.com/a/31207079
 template <typename T, typename _ = void>
@@ -39,3 +41,13 @@ using my_result_of_t =
     std::result_of_t<F(ArgTypes...)>;
 #endif
 
+// https://stackoverflow.com/a/11251408
+template < template <typename...> class Template, typename T >
+struct is_instantiation_of : std::false_type {};
+
+template < template <typename...> class Template, typename... Args >
+struct is_instantiation_of< Template, Template<Args...> > : std::true_type {};
+
+
+template <typename T>
+inline constexpr bool is_string_v = std::is_same_v<std::string, std::decay_t<T>> || std::is_same_v<std::string_view, std::decay_t<T>>;

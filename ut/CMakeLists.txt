@@ -15,11 +15,13 @@ SET ( clickhouse-cpp-ut-src
     performance_tests.cpp
     tcp_server.cpp
     readonly_client_test.cpp
+    abnormal_column_names_test.cpp
     connection_failed_client_test.cpp
     array_of_low_cardinality_tests.cpp
     CreateColumnByType_ut.cpp
     Column_ut.cpp
     roundtrip_column.cpp
+    roundtrip_tests.cpp
 
     utils.cpp
     value_generators.cpp
@@ -35,9 +37,10 @@ ADD_EXECUTABLE (clickhouse-cpp-ut
 )
 
 TARGET_LINK_LIBRARIES (clickhouse-cpp-ut
-    clickhouse-cpp-lib-static
+    clickhouse-cpp-lib
     gtest-lib
 )
-IF (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-    set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} --rtlib=compiler-rt")
-ENDIF ()
+
+IF (MSVC)
+    TARGET_COMPILE_OPTIONS(clickhouse-cpp-ut PRIVATE /bigobj)
+ENDIF()

@@ -58,11 +58,6 @@ std::string_view ColumnFixedString::At(size_t n) const {
     return std::string_view(&data_.at(pos), string_size_);
 }
 
-std::string_view ColumnFixedString::operator [](size_t n) const {
-    const auto pos = n * string_size_;
-    return std::string_view(&data_[pos], string_size_);
-}
-
 size_t ColumnFixedString::FixedSize() const {
        return string_size_;
 }
@@ -232,10 +227,6 @@ std::string_view ColumnString::At(size_t n) const {
     return items_.at(n);
 }
 
-std::string_view ColumnString::operator [] (size_t n) const {
-    return items_[n];
-}
-
 void ColumnString::Append(ColumnRef column) {
     if (auto col = column->As<ColumnString>()) {
         const auto total_size = ComputeTotalSize(col->items_);
@@ -252,26 +243,37 @@ void ColumnString::Append(ColumnRef column) {
 }
 
 bool ColumnString::LoadBody(InputStream* input, size_t rows) {
-    items_.clear();
-    blocks_.clear();
+    if (rows == 0) {
+        items_.clear();
+        blocks_.clear();
 
-    items_.reserve(rows);
-    Block * block = nullptr;
+        return true;
+    }
 
-    // TODO(performance): unroll a loop to a first row (to get rid of `blocks_.size() == 0` check) and the rest.
+    decltype(items_) new_items;
+    decltype(blocks_) new_blocks;
+
+    new_items.reserve(rows);
+
+    // Suboptimzal if the first row string is >DEFAULT_BLOCK_SIZE, but that must be a very rare case.
+    Block * block = &new_blocks.emplace_back(DEFAULT_BLOCK_SIZE);
+
     for (size_t i = 0; i < rows; ++i) {
         uint64_t len;
         if (!WireFormat::ReadUInt64(*input, &len))
             return false;
 
-        if (blocks_.size() == 0 || len > block->GetAvailable())
-            block = &blocks_.emplace_back(std::max<size_t>(DEFAULT_BLOCK_SIZE, len));
+        if (len > block->GetAvailable())
+            block = &new_blocks.emplace_back(std::max<size_t>(DEFAULT_BLOCK_SIZE, len));
 
         if (!WireFormat::ReadBytes(*input, block->GetCurrentWritePos(), len))
             return false;
 
-        items_.emplace_back(block->ConsumeTailAsStringViewUnsafe(len));
+        new_items.emplace_back(block->ConsumeTailAsStringViewUnsafe(len));
     }
+
+    items_.swap(new_items);
+    blocks_.swap(new_blocks);
 
     return true;
 }

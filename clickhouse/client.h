@@ -44,18 +44,39 @@ enum class CompressionMethod {
     LZ4     =  1,
 };
 
+struct Endpoint {
+    std::string host;
+    uint16_t port = 9000;
+    inline bool operator==(const Endpoint& right) const {
+        return host == right.host && port == right.port;
+    }
+};
+
+enum class EndpointsIterationAlgorithm {
+    RoundRobin = 0,
+};
+
 struct ClientOptions {
+    // Setter goes first, so it is possible to apply 'deprecated' annotation safely.
 #define DECLARE_FIELD(name, type, setter, default_value) \
-    type name = default_value; \
     inline auto & setter(const type& value) { \
         name = value; \
         return *this; \
-    }
+    } \
+    type name = default_value
 
     /// Hostname of the server.
     DECLARE_FIELD(host, std::string, SetHost, std::string());
     /// Service port.
-    DECLARE_FIELD(port, unsigned int, SetPort, 9000);
+    DECLARE_FIELD(port, uint16_t, SetPort, 9000);
+
+    /** Set endpoints (host+port), only one is used.
+     * Client tries to connect to those endpoints one by one, on the round-robin basis:
+     * first default enpoint (set via SetHost() + SetPort()), then each of endpoints, from begin() to end(),
+     * the first one to establish connection is used for the rest of the session.
+     * If port isn't specified, default(9000) value will be used.
+     */
+    DECLARE_FIELD(endpoints, std::vector<Endpoint>, SetEndpoints, {});
 
     /// Default database.
     DECLARE_FIELD(default_database, std::string, SetDefaultDatabase, "default");
@@ -88,6 +109,9 @@ struct ClientOptions {
     // TCP options
     DECLARE_FIELD(tcp_nodelay, bool, TcpNoDelay, true);
 
+    /// Connection socket connect timeout. If the timeout is negative then the connect operation will never timeout.
+    DECLARE_FIELD(connection_connect_timeout, std::chrono::milliseconds, SetConnectionConnectTimeout, std::chrono::seconds(5));
+
     /// Connection socket timeout. If the timeout is set to zero then the operation will never timeout.
     DECLARE_FIELD(connection_recv_timeout, std::chrono::milliseconds, SetConnectionRecvTimeout, std::chrono::milliseconds(0));
     DECLARE_FIELD(connection_send_timeout, std::chrono::milliseconds, SetConnectionSendTimeout, std::chrono::milliseconds(0));
@@ -99,7 +123,7 @@ struct ClientOptions {
     * @see LowCardinalitySerializationAdaptor, CreateColumnByType
     */
     [[deprecated("Makes implementation of LC(X) harder and code uglier. Will be removed in next major release (3.0) ")]]
-    DECLARE_FIELD(backward_compatibility_lowcardinality_as_wrapped_column, bool, SetBakcwardCompatibilityFeatureLowCardinalityAsWrappedColumn, true);
+    DECLARE_FIELD(backward_compatibility_lowcardinality_as_wrapped_column, bool, SetBakcwardCompatibilityFeatureLowCardinalityAsWrappedColumn, false);
 
     /** Set max size data to compress if compression enabled.
      *
@@ -240,6 +264,12 @@ public:
 
     const ServerInfo& GetServerInfo() const;
 
+    /// Get current connected endpoint.
+    /// In case when client is not connected to any endpoint, nullopt will returned.
+    const std::optional<Endpoint>& GetCurrentEndpoint() const;
+
+    // Try to connect to different endpoints one by one only one time. If it doesn't work, throw an exception.
+    void ResetConnectionEndpoint();
 private:
     const ClientOptions options_;
 

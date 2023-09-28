@@ -3,6 +3,7 @@
 #include "platform.h"
 #include "input.h"
 #include "output.h"
+#include "endpoints_iterator.h"
 
 #include <cstddef>
 #include <string>
@@ -60,6 +61,18 @@ public:
 
 #endif
 
+#if defined(_unix_)
+
+class getaddrinfoErrorCategory : public std::error_category {
+public:
+    char const* name() const noexcept override final;
+    std::string message(int c) const override final;
+
+    static getaddrinfoErrorCategory const& category();
+};
+
+#endif
+
 
 class SocketBase {
 public:
@@ -76,13 +89,14 @@ public:
 
     // TODO: move connection-related options to ConnectionOptions structure.
 
-    virtual std::unique_ptr<SocketBase> connect(const ClientOptions& opts) = 0;
+    virtual std::unique_ptr<SocketBase> connect(const ClientOptions& opts, const Endpoint& endpoint) = 0;
 
     virtual void sleepFor(const std::chrono::milliseconds& duration);
 };
 
 
 struct SocketTimeoutParams {
+    std::chrono::milliseconds connect_timeout{ 5000 };
     std::chrono::milliseconds recv_timeout{ 0 };
     std::chrono::milliseconds send_timeout{ 0 };
 };
@@ -122,7 +136,7 @@ class NonSecureSocketFactory : public SocketFactory {
 public:
     ~NonSecureSocketFactory() override;
 
-    std::unique_ptr<SocketBase> connect(const ClientOptions& opts) override;
+    std::unique_ptr<SocketBase> connect(const ClientOptions& opts, const Endpoint& endpoint) override;
 
 protected:
     virtual std::unique_ptr<Socket> doConnect(const NetworkAddress& address, const ClientOptions& opts);

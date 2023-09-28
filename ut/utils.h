@@ -3,9 +3,11 @@
 #include <clickhouse/base/platform.h>
 #include <clickhouse/base/uuid.h>
 
+#include "clickhouse/query.h"
 #include "utils_meta.h"
 #include "utils_comparison.h"
 
+#include <optional>
 #include <ostream>
 #include <ratio>
 #include <string_view>
@@ -23,6 +25,9 @@ namespace clickhouse {
     class Block;
     class Type;
     struct ServerInfo;
+    struct Profile;
+    struct QuerySettingsField;
+    struct Progress;
 }
 
 template <typename ResultType = std::string>
@@ -46,7 +51,8 @@ auto getEnvOrDefault(const std::string& env, const char * default_val) {
                 return std::stoll(value);
         } else if constexpr (std::is_unsigned_v<ResultType>) {
             if constexpr (sizeof(ResultType) <= sizeof(unsigned long))
-                return std::stoul(value);
+                // For cases when ResultType is unsigned int.
+                return static_cast<ResultType>(std::stoul(value));
             else if constexpr (sizeof(ResultType) <= sizeof(unsigned long long))
                 return std::stoull(value);
         }
@@ -112,6 +118,15 @@ template <typename ... T>
 inline ostream & operator<<(ostream & ostr, const tuple<T...> & t) {
     return printTuple(ostr, t);
 }
+
+template <typename T>
+inline ostream & operator<<(ostream & ostr, const optional<T> & t) {
+    if (t.has_value()) {
+        return ostr << *t;
+    } else {
+        return ostr << "NULL";
+    }
+}
 }
 
 
@@ -126,6 +141,8 @@ namespace clickhouse {
 std::ostream& operator<<(std::ostream & ostr, const Block & block);
 std::ostream& operator<<(std::ostream & ostr, const Type & type);
 std::ostream & operator<<(std::ostream & ostr, const ServerInfo & server_info);
+std::ostream & operator<<(std::ostream & ostr, const Profile & profile);
+std::ostream & operator<<(std::ostream & ostr, const Progress & progress);
 }
 
 std::ostream& operator<<(std::ostream & ostr, const PrettyPrintBlock & block);
@@ -150,7 +167,10 @@ std::ostream& operator<<(std::ostream & ostr, const PrintContainer<T>& print_con
     for (auto i = std::begin(container); i != std::end(container); /*intentionally no ++i*/) {
         const auto & elem = *i;
 
-        if constexpr (is_container_v<std::decay_t<decltype(elem)>>) {
+        if constexpr (is_string_v<decltype(elem)>) {
+            ostr << '"' << elem << '"';
+        }
+        else if constexpr (is_container_v<std::decay_t<decltype(elem)>>) {
             ostr << PrintContainer{elem};
         } else {
             ostr << elem;
