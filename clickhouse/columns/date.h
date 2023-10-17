@@ -13,6 +13,7 @@ public:
     using ValueType = std::time_t;
 
     ColumnDate();
+    explicit ColumnDate(std::vector<uint16_t>&& data);
 
     /// Appends one element to the end of column.
     /// The implementation is fundamentally wrong, ignores timezones, leap years and daylight saving.
@@ -29,6 +30,15 @@ public:
 
     /// Appends content of given column to the end of current one.
     void Append(ColumnRef column) override;
+
+    /// Get Raw Vector Contents
+    std::vector<uint16_t>& GetWritableData();
+
+    /// Increase the capacity of the column
+    void Reserve(size_t new_cap);
+
+    /// Returns the capacity of the column
+    size_t Capacity() const;
 
     /// Loads column data from input stream.
     bool LoadBody(InputStream* input, size_t rows) override;
@@ -59,6 +69,7 @@ public:
     using ValueType = std::time_t;
 
     ColumnDate32();
+    explicit ColumnDate32(std::vector<int32_t>&& data);
 
     /// Appends one element to the end of column.
     /// The implementation is fundamentally wrong, ignores timezones, leap years and daylight saving.
@@ -76,6 +87,15 @@ public:
     /// Do append data as is -- number of day in Unix epoch (32bit signed), no conversions performed.
     void AppendRaw(int32_t value);
     int32_t RawAt(size_t n) const;
+
+    /// Get Raw Vector Contents
+    std::vector<int32_t>& GetWritableData();
+
+    /// Increase the capacity of the column
+    void Reserve(size_t new_cap);
+
+    /// Returns the capacity of the column
+    size_t Capacity() const;
 
     /// Loads column data from input stream.
     bool LoadBody(InputStream* input, size_t rows) override;
@@ -107,7 +127,10 @@ public:
     using ValueType = std::time_t;
 
     ColumnDateTime();
+    explicit ColumnDateTime(std::vector<uint32_t>&& data);
+
     explicit ColumnDateTime(std::string timezone);
+    ColumnDateTime(std::string timezone, std::vector<uint32_t>&& data);
 
     /// Appends one element to the end of column.
     void Append(const std::time_t& value);
@@ -116,8 +139,20 @@ public:
     std::time_t At(size_t n) const;
     inline std::time_t operator [] (size_t n) const { return At(n); }
 
+    /// Append raw as UNIX epoch seconds in uint32
+    void AppendRaw(uint32_t value);
+
     /// Timezone associated with a data column.
     std::string Timezone() const;
+
+    /// Get Raw Vector Contents
+    std::vector<uint32_t>& GetWritableData();
+
+    /// Increase the capacity of the column
+    void Reserve(size_t new_cap);
+
+    /// Returns the capacity of the column
+    size_t Capacity() const;
 
 public:
     /// Appends content of given column to the end of current one.

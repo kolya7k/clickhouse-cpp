@@ -9,6 +9,12 @@ ColumnDate::ColumnDate()
 {
 }
 
+ColumnDate::ColumnDate(std::vector<uint16_t>&& data)
+    : Column(Type::CreateDate())
+    , data_(std::make_shared<ColumnUInt16>(std::move(data)))
+{
+}
+
 void ColumnDate::Append(const std::time_t& value) {
     /// The implementation is fundamentally wrong, ignores timezones, leap years and daylight saving.
     data_->Append(static_cast<uint16_t>(value / std::time_t(86400)));
@@ -35,6 +41,18 @@ void ColumnDate::Append(ColumnRef column) {
     if (auto col = column->As<ColumnDate>()) {
         data_->Append(col->data_);
     }
+}
+
+std::vector<uint16_t>& ColumnDate::GetWritableData() {
+    return data_->GetWritableData();
+}
+
+void ColumnDate::Reserve(size_t new_cap) {
+    data_->Reserve(new_cap);
+}
+
+size_t ColumnDate::Capacity() const {
+    return data_->Capacity();
 }
 
 bool ColumnDate::LoadBody(InputStream* input, size_t rows) {
@@ -78,6 +96,12 @@ ColumnDate32::ColumnDate32()
 {
 }
 
+ColumnDate32::ColumnDate32(std::vector<int32_t>&& data)
+    : Column(Type::CreateDate32())
+    , data_(std::make_shared<ColumnInt32>(std::move(data)))
+{
+}
+
 void ColumnDate32::Append(const std::time_t& value) {
     /// The implementation is fundamentally wrong, ignores timezones, leap years and daylight saving.
     data_->Append(static_cast<int32_t>(value / std::time_t(86400)));
@@ -96,6 +120,18 @@ void ColumnDate32::Append(ColumnRef column) {
     if (auto col = column->As<ColumnDate32>()) {
         data_->Append(col->data_);
     }
+}
+
+std::vector<int32_t>& ColumnDate32::GetWritableData() {
+    return data_->GetWritableData();
+}
+
+void ColumnDate32::Reserve(size_t new_cap) {
+    data_->Reserve(new_cap);
+}
+
+size_t ColumnDate32::Capacity() const {
+    return data_->Capacity();
 }
 
 void ColumnDate32::AppendRaw(int32_t value) {
@@ -152,12 +188,26 @@ ColumnDateTime::ColumnDateTime(std::string timezone)
 {
 }
 
+ColumnDateTime::ColumnDateTime(std::vector<uint32_t>&& data)
+    : Column(Type::CreateDateTime())
+    , data_(std::make_shared<ColumnUInt32>(std::move(data))) {
+}
+
+ColumnDateTime::ColumnDateTime(std::string timezone, std::vector<uint32_t>&& data)
+    : Column(Type::CreateDateTime(std::move(timezone)))
+    , data_(std::make_shared<ColumnUInt32>(std::move(data))) {
+}
+
 void ColumnDateTime::Append(const std::time_t& value) {
     data_->Append(static_cast<uint32_t>(value));
 }
 
 std::time_t ColumnDateTime::At(size_t n) const {
     return data_->At(n);
+}
+
+void ColumnDateTime::AppendRaw(uint32_t value) {
+    data_->Append(value);
 }
 
 std::string ColumnDateTime::Timezone() const {
@@ -168,6 +218,18 @@ void ColumnDateTime::Append(ColumnRef column) {
     if (auto col = column->As<ColumnDateTime>()) {
         data_->Append(col->data_);
     }
+}
+
+std::vector<uint32_t>& ColumnDateTime::GetWritableData() {
+    return data_->GetWritableData();
+}
+
+void ColumnDateTime::Reserve(size_t new_cap) {
+    data_->Reserve(new_cap);
+}
+
+size_t ColumnDateTime::Capacity() const {
+    return data_->Capacity();
 }
 
 bool ColumnDateTime::LoadBody(InputStream* input, size_t rows) {
