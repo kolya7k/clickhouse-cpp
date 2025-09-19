@@ -33,16 +33,16 @@ class OpenSSLError : public Error {
     using Error::Error;
 };
 
-class LZ4Error : public Error {
+class CompressionError : public Error {
     using Error::Error;
 };
 
 // Exception received from server.
 class ServerException : public Error {
 public:
-    ServerException(std::unique_ptr<Exception> e)
+    ServerException(std::shared_ptr<Exception> e)
         : Error(std::string())
-        , exception_(std::move(e))
+        , exception_(e)
     {
     }
 
@@ -59,7 +59,7 @@ public:
     }
 
 private:
-    std::unique_ptr<Exception> exception_;
+    std::shared_ptr<Exception> exception_;
 };
 using ServerError = ServerException;
 

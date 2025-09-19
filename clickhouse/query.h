@@ -26,6 +26,8 @@ struct QuerySettingsField {
 };
 
 using QuerySettings = std::unordered_map<std::string, QuerySettingsField>;
+using QueryParamValue = std::optional<std::string>;
+using QueryParams = std::unordered_map<std::string, QueryParamValue>;
 
 struct Profile {
     uint64_t rows = 0;
@@ -80,7 +82,7 @@ using SelectCallback           = std::function<void(const Block& block)>;
 using SelectCancelableCallback = std::function<bool(const Block& block)>;
 using SelectServerLogCallback  = std::function<bool(const Block& block)>;
 using ProfileEventsCallback    = std::function<bool(const Block& block)>;
-using ProfileCallbak           = std::function<void(const Profile& profile)>;
+using ProfileCallback          = std::function<void(const Profile& profile)>;
 
 
 class Query : public QueryEvents {
@@ -112,6 +114,18 @@ public:
     /// Set per query setting
     inline Query& SetSetting(const std::string& key, const QuerySettingsField& value) {
         query_settings_[key] = value;
+        return *this;
+    }
+
+    inline const QueryParams& GetParams() const { return query_params_; }
+
+    inline Query& SetParams(QueryParams query_params) {
+        query_params_ = std::move(query_params);
+        return *this;
+    }
+
+    inline Query& SetParam(const std::string& name, const QueryParamValue& value) {
+        query_params_[name] = value;
         return *this;
     }
 
@@ -160,7 +174,7 @@ public:
         return *this;
     }
 
-    inline Query& OnProfile(ProfileCallbak cb) {
+    inline Query& OnProfile(ProfileCallback cb) {
         profile_callback_cb_ = std::move(cb);
         return *this;
     }
@@ -219,13 +233,14 @@ private:
     const std::string query_id_;
     std::optional<open_telemetry::TracingContext> tracing_context_;
     QuerySettings query_settings_;
+    QueryParams query_params_;
     ExceptionCallback exception_cb_;
     ProgressCallback progress_cb_;
     SelectCallback select_cb_;
     SelectCancelableCallback select_cancelable_cb_;
     SelectServerLogCallback select_server_log_cb_;
     ProfileEventsCallback profile_events_callback_cb_;
-    ProfileCallbak profile_callback_cb_;
+    ProfileCallback profile_callback_cb_;
 };
 
 }

@@ -434,6 +434,20 @@ TEST_P(ClientCase, Nullable) {
     EXPECT_EQ(sizeof(TEST_DATA) / sizeof(TEST_DATA[0]), row);
 }
 
+TEST_P(ClientCase, Nothing) {
+    size_t total_row_count = 0;
+    client_->Select("SELECT NULL", [&total_row_count](const Block & block)
+        {
+            total_row_count += block.GetRowCount();
+            for (size_t i = 0; i < block.GetRowCount(); ++i) {
+                EXPECT_TRUE(block[0]->AsStrict<ColumnNullable>()->IsNull(i));
+                auto column = ColumnNullableT<ColumnNothing>::Wrap(block[0]->AsStrict<ColumnNullable>());
+                EXPECT_FALSE(column->At(i).has_value());
+            }
+        });
+    ASSERT_EQ(total_row_count, 1UL);
+}
+
 TEST_P(ClientCase, Numbers) {
     try {
         size_t num = 0;
@@ -1487,4 +1501,82 @@ TEST(SimpleClientTest, issue_335_reconnects_count) {
         EXPECT_TRUE(connect_requests.end() != p)
             << "\tThere was no attempt to connect to endpoint " << endpoint;
     }
+}
+
+TEST_P(ClientCase, QueryParameters) {
+    const auto & server_info = client_->GetServerInfo();
+    if (versionNumber(server_info) < versionNumber(24, 7)) {
+        GTEST_SKIP() << "Test is skipped since server '" << server_info << "' does not support query parameters" << std::endl;
+    }
+    const std::string table_name = "test_clickhouse_cpp_query_parameter";
+    client_->Execute("CREATE TEMPORARY TABLE IF NOT EXISTS " + table_name + " (id UInt64, name String)");
+    {
+        Query query("insert into " + table_name + " values ({id: UInt64}, {name: String})");
+
+        query.SetParam("id", "1").SetParam("name", "NAME");
+        client_->Execute(query);
+
+        query.SetParam("id", "123").SetParam("name", "FromParam");
+        client_->Execute(query);
+
+        const char FirstPrintable = ' ';
+        char test_str1[FirstPrintable * 2 + 1];
+        for (unsigned int i = 0; i < FirstPrintable; i++) {
+            test_str1[i * 2]     = 'A';
+            test_str1[i * 2 + 1] = i;
+        }
+        test_str1[int(FirstPrintable * 2)] = 'A';
+
+        query.SetParam("id", "333").SetParam("name", std::string(test_str1, FirstPrintable * 2 + 1));
+        client_->Execute(query);
+
+        const char LastPrintable = 127;
+        unsigned char big_string[LastPrintable - FirstPrintable];
+        for (unsigned int i = 0; i < sizeof(big_string); i++) big_string[i] = i + FirstPrintable;
+        query.SetParam("id", "444").SetParam("name", std::string((char*)big_string, sizeof(big_string)));
+        client_->Execute(query);
+
+        query.SetParam("id", "555").SetParam("name", "utf8Русский");
+        client_->Execute(query);
+    }
+
+    Query query("SELECT id, name, length(name) FROM " + table_name + " where id > {a: Int32}");
+    query.SetParam("a", "4");
+    size_t total_count = 0;
+    SelectCallback cb([&total_count](const Block& block) {
+        total_count += block.GetRowCount();
+        //std::cout << PrettyPrintBlock{block} << std::endl;
+    });
+    query.OnData(cb);
+    client_->Select(query);
+    EXPECT_EQ(4u, total_count);
+
+    client_->Execute("DROP TEMPORARY TABLE " + table_name);
+}
+
+TEST_P(ClientCase, ClientName) {
+    const auto server_info = client_->GetServerInfo();
+
+    std::srand(std::time(nullptr) + reinterpret_cast<int64_t>(&server_info));
+    const auto * test_info = ::testing::UnitTest::GetInstance()->current_test_info();
+    const std::string query_id = std::to_string(std::rand()) + "-" + test_info->test_suite_name() + "/" + test_info->name();
+
+    SCOPED_TRACE(query_id);
+
+    client_->Select("SELECT 1", query_id, [](const Block&) { /* make sure the data is delivered in full */ });
+
+    FlushLogs();
+
+    std::string query_log_query 
+        = "SELECT CAST(client_name, 'String') FROM system.query_log WHERE query_id = '" + query_id + "'";
+
+    size_t total_rows = 0;
+    client_->Select(query_log_query, [&total_rows](const Block& block) {
+        const auto row_count = block.GetRowCount();
+        total_rows += row_count;
+        for (size_t i = 0; i < row_count; ++i) {
+            ASSERT_EQ(block[0]->AsStrict<ColumnString>()->At(i), "clickhouse-cpp");
+        }
+    });
+    ASSERT_GT(total_rows, 0UL) << "Query with query_id " << query_id << " is not found";
 }

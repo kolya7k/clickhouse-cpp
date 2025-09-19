@@ -17,7 +17,7 @@
 #include "base/sslsocket.h"
 #endif
 
-#define DBMS_NAME                                       "ClickHouse"
+#define CLIENT_NAME "clickhouse-cpp"
 
 #define DBMS_MIN_REVISION_WITH_TEMPORARY_TABLES         50264
 #define DBMS_MIN_REVISION_WITH_TOTAL_ROWS_IN_PROGRESS   51554
@@ -38,8 +38,13 @@
 #define DBMS_MIN_REVISION_WITH_DISTRIBUTED_DEPTH        54448
 #define DBMS_MIN_REVISION_WITH_INITIAL_QUERY_START_TIME 54449
 #define DBMS_MIN_REVISION_WITH_INCREMENTAL_PROFILE_EVENTS 54451
+#define DBMS_MIN_REVISION_WITH_PARALLEL_REPLICAS 54453
+#define DBMS_MIN_REVISION_WITH_CUSTOM_SERIALIZATION  54454 // Client can get some fields in JSon format
+#define DBMS_MIN_PROTOCOL_VERSION_WITH_ADDENDUM 54458 // send quota key after handshake
+#define DBMS_MIN_PROTOCOL_REVISION_WITH_QUOTA_KEY 54458 // the same
+#define DBMS_MIN_PROTOCOL_VERSION_WITH_PARAMETERS 54459
 
-#define DMBS_PROTOCOL_REVISION  DBMS_MIN_REVISION_WITH_INCREMENTAL_PROFILE_EVENTS
+#define DMBS_PROTOCOL_REVISION  DBMS_MIN_PROTOCOL_VERSION_WITH_PARAMETERS
 
 namespace clickhouse {
 
@@ -86,7 +91,9 @@ std::ostream& operator<<(std::ostream& os, const ClientOptions& opt) {
        << " send_retries:" << opt.send_retries
        << " retry_timeout:" << opt.retry_timeout.count()
        << " compression_method:"
-       << (opt.compression_method == CompressionMethod::LZ4 ? "LZ4" : "None");
+       << (opt.compression_method == CompressionMethod::LZ4    ? "LZ4"
+           : opt.compression_method == CompressionMethod::ZSTD ? "ZSTD"
+                                                               : "None");
 #if defined(WITH_OPENSSL)
     if (opt.ssl_options) {
         const auto & ssl_options = *opt.ssl_options;
@@ -148,6 +155,8 @@ public:
 
     void ExecuteQuery(Query query);
 
+    void SelectWithExternalData(Query query, const ExternalTables& external_tables);
+
     void SendCancel();
 
     void Insert(const std::string& table_name, const std::string& query_id, const Block& block);
@@ -171,9 +180,13 @@ private:
 
     bool ReceivePacket(uint64_t* server_packet = nullptr);
 
-    void SendQuery(const Query& query);
+    void SendQuery(const Query& query, bool finalize = true);
+    void FinalizeQuery();
 
     void SendData(const Block& block);
+
+    void SendBlockData(const Block& block);
+    void SendExternalData(const ExternalTables& external_tables);
 
     bool SendHello();
 
@@ -287,6 +300,51 @@ void Client::Impl::ExecuteQuery(Query query) {
         ;
     }
 }
+
+
+void Client::Impl::SelectWithExternalData(Query query, const ExternalTables& external_tables) {
+    if (server_info_.revision < DBMS_MIN_REVISION_WITH_TEMPORARY_TABLES) {
+       throw UnimplementedError("This version of ClickHouse server doesn't support temporary tables");
+    }
+
+    EnsureNull en(static_cast<QueryEvents*>(&query), &events_);
+
+    if (options_.ping_before_query) {
+        RetryGuard([this]() { Ping(); });
+    }
+
+    SendQuery(query, false);
+    SendExternalData(external_tables);
+    FinalizeQuery();
+
+    while (ReceivePacket()) {
+        ;
+    }
+}
+
+void Client::Impl::SendBlockData(const Block& block) {
+    if (compression_ == CompressionState::Enable) {
+        std::unique_ptr<OutputStream> compressed_output = std::make_unique<CompressedOutput>(output_.get(), options_.max_compression_chunk_size, options_.compression_method);
+        BufferedOutput buffered(std::move(compressed_output), options_.max_compression_chunk_size);
+    
+        WriteBlock(block, buffered);
+    } else {
+        WriteBlock(block, *output_);
+    }
+}
+
+void Client::Impl::SendExternalData(const ExternalTables& external_tables) {
+    for (const auto& table: external_tables) {
+        if (!table.data.GetRowCount()) {
+           // skip empty blocks to keep the connection in the consistent state as the current request would be marked as finished by such an empty block
+           continue;
+        }
+        WireFormat::WriteFixed<uint8_t>(*output_, ClientCodes::Data);
+        WireFormat::WriteString(*output_, table.name);
+        SendBlockData(table.data);
+    }
+}
+
 
 std::string NameToQueryString(const std::string &input)
 {
@@ -474,6 +532,11 @@ bool Client::Impl::Handshake() {
     if (!ReceiveHello()) {
         return false;
     }
+
+    if (server_info_.revision >= DBMS_MIN_PROTOCOL_VERSION_WITH_ADDENDUM) {
+        WireFormat::WriteString(*output_, std::string());
+    }
+
     return true;
 }
 
@@ -543,7 +606,7 @@ bool Client::Impl::ReceivePacket(uint64_t* server_packet) {
                 return false;
             }
         }
-        if constexpr (DMBS_PROTOCOL_REVISION >= DBMS_MIN_REVISION_WITH_CLIENT_WRITE_INFO)
+        if (server_info_.revision >= DBMS_MIN_REVISION_WITH_CLIENT_WRITE_INFO)
         {
             if (!WireFormat::ReadUInt64(*input_, &info.written_rows)) {
                 return false;
@@ -630,7 +693,7 @@ bool Client::Impl::ReceivePacket(uint64_t* server_packet) {
 
 bool Client::Impl::ReadBlock(InputStream& input, Block* block) {
     // Additional information about block.
-    if constexpr (DMBS_PROTOCOL_REVISION >= DBMS_MIN_REVISION_WITH_BLOCK_INFO) {
+    if (server_info_.revision >= DBMS_MIN_REVISION_WITH_BLOCK_INFO) {
         uint64_t num;
         BlockInfo info;
 
@@ -676,6 +739,16 @@ bool Client::Impl::ReadBlock(InputStream& input, Block* block) {
         if (!WireFormat::ReadString(input, &type)) {
             return false;
         }
+    
+        if (server_info_.revision >= DBMS_MIN_REVISION_WITH_CUSTOM_SERIALIZATION) {
+            uint8_t custom_format_len;
+            if (!WireFormat::ReadFixed(input, &custom_format_len)) {
+                return false;
+            }
+            if (custom_format_len > 0) {
+                throw UnimplementedError(std::string("unsupported custom serialization"));
+            }
+        }  
 
         if (ColumnRef col = CreateColumnByType(type, create_column_settings)) {
             if (num_rows && !col->Load(&input, num_rows)) {
@@ -694,7 +767,7 @@ bool Client::Impl::ReadBlock(InputStream& input, Block* block) {
 bool Client::Impl::ReceiveData() {
     Block block;
 
-    if constexpr (DMBS_PROTOCOL_REVISION >= DBMS_MIN_REVISION_WITH_TEMPORARY_TABLES) {
+    if (server_info_.revision >= DBMS_MIN_REVISION_WITH_TEMPORARY_TABLES) {
         if (!WireFormat::SkipString(*input_)) {
             return false;
         }
@@ -722,7 +795,7 @@ bool Client::Impl::ReceiveData() {
 }
 
 bool Client::Impl::ReceiveException(bool rethrow) {
-    std::unique_ptr<Exception> e(new Exception);
+    std::shared_ptr<Exception> e(new Exception);
     Exception* current = e.get();
 
     bool exception_received = true;
@@ -763,7 +836,7 @@ bool Client::Impl::ReceiveException(bool rethrow) {
     }
 
     if (rethrow || options_.rethrow_exceptions) {
-        throw ServerError(std::move(e));
+        throw ServerError(e);
     }
 
     return exception_received;
@@ -774,7 +847,7 @@ void Client::Impl::SendCancel() {
     output_->Flush();
 }
 
-void Client::Impl::SendQuery(const Query& query) {
+void Client::Impl::SendQuery(const Query& query, bool finalize) {
     WireFormat::WriteUInt64(*output_, ClientCodes::Query);
     WireFormat::WriteString(*output_, query.GetQueryID());
 
@@ -783,7 +856,7 @@ void Client::Impl::SendQuery(const Query& query) {
         ClientInfo info;
 
         info.query_kind = 1;
-        info.client_name = "ClickHouse client";
+        info.client_name          = CLIENT_NAME;
         info.client_version_major = CLICKHOUSE_CPP_VERSION_MAJOR;
         info.client_version_minor = CLICKHOUSE_CPP_VERSION_MINOR;
         info.client_version_patch = CLICKHOUSE_CPP_VERSION_PATCH;
@@ -834,6 +907,12 @@ void Client::Impl::SendQuery(const Query& query) {
                 throw UnimplementedError(std::string("Can't send open telemetry tracing context to a server, server version is too old"));
             }
         }
+        if (server_info_.revision >= DBMS_MIN_REVISION_WITH_PARALLEL_REPLICAS) {
+            // replica dont supported by client
+            WireFormat::WriteUInt64(*output_, 0);
+            WireFormat::WriteUInt64(*output_, 0);
+            WireFormat::WriteUInt64(*output_, 0);
+        }
     }
 
     /// Per query settings
@@ -858,6 +937,28 @@ void Client::Impl::SendQuery(const Query& query) {
     WireFormat::WriteUInt64(*output_, Stages::Complete);
     WireFormat::WriteUInt64(*output_, compression_);
     WireFormat::WriteString(*output_, query.GetText());
+
+    //Send params after query text
+    if (server_info_.revision >= DBMS_MIN_PROTOCOL_VERSION_WITH_PARAMETERS) {
+        for(const auto& [name, value] : query.GetParams()) {
+            // params is like query settings
+            WireFormat::WriteString(*output_, name);
+            const uint64_t Custom = 2;
+            WireFormat::WriteVarint64(*output_, Custom);
+            if (value)
+                WireFormat::WriteQuotedString(*output_, *value);
+            else
+                WireFormat::WriteParamNullRepresentation(*output_);
+        }
+        WireFormat::WriteString(*output_, std::string()); // empty string after last param
+    }
+ 
+    if (finalize) {
+        FinalizeQuery();
+    }
+}
+
+void Client::Impl::FinalizeQuery() {
     // Send empty block as marker of
     // end of data
     SendData(Block());
@@ -883,6 +984,11 @@ void Client::Impl::WriteBlock(const Block& block, OutputStream& output) {
         WireFormat::WriteString(output, bi.Name());
         WireFormat::WriteString(output, bi.Type()->GetName());
 
+        if (server_info_.revision >= DBMS_MIN_REVISION_WITH_CUSTOM_SERIALIZATION) {
+            // TODO: custom serialization
+            WireFormat::WriteFixed<uint8_t>(output, 0);
+        }
+
         // Empty columns are not serialized and occupy exactly 0 bytes.
         // ref https://github.com/ClickHouse/ClickHouse/blob/39b37a3240f74f4871c8c1679910e065af6bea19/src/Formats/NativeWriter.cpp#L163
         const bool containsData = block.GetRowCount() > 0;
@@ -899,17 +1005,7 @@ void Client::Impl::SendData(const Block& block) {
     if (server_info_.revision >= DBMS_MIN_REVISION_WITH_TEMPORARY_TABLES) {
         WireFormat::WriteString(*output_, std::string());
     }
-
-    if (compression_ == CompressionState::Enable) {
-        assert(options_.compression_method == CompressionMethod::LZ4);
-
-        std::unique_ptr<OutputStream> compressed_output = std::make_unique<CompressedOutput>(output_.get(), options_.max_compression_chunk_size);
-        BufferedOutput buffered(std::move(compressed_output), options_.max_compression_chunk_size);
-
-        WriteBlock(block, buffered);
-    } else {
-        WriteBlock(block, *output_);
-    }
+    SendBlockData(block);
 
     output_->Flush();
 }
@@ -925,7 +1021,7 @@ void Client::Impl::InitializeStreams(std::unique_ptr<SocketBase>&& socket) {
 
 bool Client::Impl::SendHello() {
     WireFormat::WriteUInt64(*output_, ClientCodes::Hello);
-    WireFormat::WriteString(*output_, std::string(DBMS_NAME) + " client");
+    WireFormat::WriteString(*output_, std::string(CLIENT_NAME));
     WireFormat::WriteUInt64(*output_, CLICKHOUSE_CPP_VERSION_MAJOR);
     WireFormat::WriteUInt64(*output_, CLICKHOUSE_CPP_VERSION_MINOR);
     WireFormat::WriteUInt64(*output_, DMBS_PROTOCOL_REVISION);
@@ -1070,6 +1166,22 @@ void Client::SelectCancelable(const std::string& query, const std::string& query
 
 void Client::Select(const Query& query) {
     Execute(query);
+}
+
+void Client::SelectWithExternalData(const std::string& query, const ExternalTables& external_tables, SelectCallback cb) {
+    impl_->SelectWithExternalData(Query(query).OnData(std::move(cb)), external_tables);
+}
+
+void Client::SelectWithExternalData(const std::string& query, const std::string& query_id, const ExternalTables& external_tables, SelectCallback cb) {
+    impl_->SelectWithExternalData(Query(query, query_id).OnData(std::move(cb)), external_tables);
+}
+
+void Client::SelectWithExternalDataCancelable(const std::string& query, const ExternalTables& external_tables, SelectCancelableCallback cb) {
+    impl_->SelectWithExternalData(Query(query).OnDataCancelable(std::move(cb)), external_tables);
+}
+
+void Client::SelectWithExternalDataCancelable(const std::string& query, const std::string& query_id, const ExternalTables& external_tables, SelectCancelableCallback cb) {
+    impl_->SelectWithExternalData(Query(query, query_id).OnDataCancelable(std::move(cb)), external_tables);
 }
 
 void Client::Insert(const std::string& table_name, const Block& block) {

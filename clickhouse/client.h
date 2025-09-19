@@ -11,6 +11,7 @@
 #include "columns/ip4.h"
 #include "columns/ip6.h"
 #include "columns/lowcardinality.h"
+#include "columns/nothing.h"
 #include "columns/nullable.h"
 #include "columns/numeric.h"
 #include "columns/map.h"
@@ -40,9 +41,10 @@ struct ServerInfo {
 };
 
 /// Methods of block compression.
-enum class CompressionMethod {
-    None    = -1,
-    LZ4     =  1,
+enum class CompressionMethod : int8_t {
+    None = -1,
+    LZ4  = 1,
+    ZSTD = 2,
 };
 
 struct Endpoint {
@@ -224,6 +226,13 @@ std::ostream& operator<<(std::ostream& os, const Endpoint& options);
 
 class SocketFactory;
 
+struct ExternalTable {
+  const std::string_view name;
+  const Block& data;
+};
+
+using ExternalTables = std::vector<ExternalTable>;
+
 /**
  *
  */
@@ -246,6 +255,16 @@ public:
     /// the data handler function \p cb.
     void SelectCancelable(const std::string& query, SelectCancelableCallback cb);
     void SelectCancelable(const std::string& query, const std::string& query_id, SelectCancelableCallback cb);
+
+    // The same as Select but with an external data
+    // required for the query, see https://clickhouse.com/docs/engines/table-engines/special/external-data
+    void SelectWithExternalData(const std::string& query, const ExternalTables& external_tables, SelectCallback cb);
+    void SelectWithExternalData(const std::string& query, const std::string& query_id, const ExternalTables& external_tables, SelectCallback cb);
+
+    // The same as SelectWithExternalData but can be canceled by returning false from
+    // the data handler function \p cb.
+    void SelectWithExternalDataCancelable(const std::string& query, const ExternalTables& external_tables, SelectCancelableCallback cb);
+    void SelectWithExternalDataCancelable(const std::string& query, const std::string& query_id, const ExternalTables& external_tables, SelectCancelableCallback cb);
 
     /// Alias for Execute.
     void Select(const Query& query);

@@ -89,7 +89,7 @@ if (MSVC)
     # remove in 3.0
     add_compile_options(/wd4996)
 else()
-    set(cxx_extra_wall "-Wempty-body -Wconversion -Wreturn-type -Wparentheses -Wuninitialized -Wunreachable-code -Wunused-function -Wunused-value -Wunused-variable")   
+    set(cxx_extra_wall "-Wempty-body -Wconversion -Wreturn-type -Wparentheses -Wuninitialized -Wunreachable-code -Wunused-function -Wunused-value -Wunused-variable")
     set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${cxx_extra_wall}")
 
     if(CMAKE_CXX_COMPILER_ID MATCHES "Clang" OR CMAKE_CXX_COMPILER_ID STREQUAL "AppleClang")
@@ -113,6 +113,7 @@ TARGET_LINK_LIBRARIES (clickhouse-cpp-lib
     absl::int128
     cityhash::cityhash
     lz4::lz4
+    zstd::zstd
 )
 TARGET_INCLUDE_DIRECTORIES (clickhouse-cpp-lib
     PUBLIC ${PROJECT_SOURCE_DIR}
@@ -129,7 +130,7 @@ ELSE ()
 ENDIF ()
 
 
-IF (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+IF (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" AND NOT DISABLE_CLANG_LIBC_WORKAROUND)
     INCLUDE (CheckCXXSourceCompiles)
 
     CHECK_CXX_SOURCE_COMPILES("#include <bits/c++config.h>\nint main() { return __GLIBCXX__ != 0; }"
@@ -155,6 +156,32 @@ INSTALL (TARGETS clickhouse-cpp-lib
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
 )
+IF (NOT BUILD_SHARED_LIBS)
+    IF (NOT WITH_SYSTEM_CITYHASH)
+        INSTALL (TARGETS cityhash
+            ARCHIVE DESTINATION lib
+            LIBRARY DESTINATION lib
+        )
+    ENDIF()
+    IF (NOT WITH_SYSTEM_LZ4)
+        INSTALL (TARGETS lz4
+            ARCHIVE DESTINATION lib
+            LIBRARY DESTINATION lib
+        )
+    ENDIF()
+    IF (NOT WITH_SYSTEM_ZSTD)
+        INSTALL (TARGETS zstdstatic
+            ARCHIVE DESTINATION lib
+            LIBRARY DESTINATION lib
+        )
+    ENDIF()
+    IF (NOT WITH_SYSTEM_ABSEIL)
+        INSTALL (TARGETS absl_int128
+            ARCHIVE DESTINATION lib
+            LIBRARY DESTINATION lib
+        )
+    ENDIF()
+ENDIF()
 
 # general
 INSTALL(FILES block.h DESTINATION include/clickhouse/)
@@ -194,6 +221,7 @@ INSTALL(FILES columns/ip4.h DESTINATION include/clickhouse/columns/)
 INSTALL(FILES columns/ip6.h DESTINATION include/clickhouse/columns/)
 INSTALL(FILES columns/itemview.h DESTINATION include/clickhouse/columns/)
 INSTALL(FILES columns/lowcardinality.h DESTINATION include/clickhouse/columns/)
+INSTALL(FILES columns/nothing.h DESTINATION include/clickhouse/columns/)
 INSTALL(FILES columns/nullable.h DESTINATION include/clickhouse/columns/)
 INSTALL(FILES columns/numeric.h DESTINATION include/clickhouse/columns/)
 INSTALL(FILES columns/map.h DESTINATION include/clickhouse/columns/)

@@ -7,15 +7,20 @@ INCLUDE (subdirs)
 INCLUDE (openssl)
 INCLUDE (version)
 
-OPTION (BUILD_BENCHMARK "Build benchmark" OFF)
-OPTION (BUILD_TESTS "Build tests" OFF)
-OPTION (BUILD_SHARED_LIBS "Build shared libs" OFF)
+# use global flags only for standalone build
+IF ("${CMAKE_CURRENT_SOURCE_DIR}" STREQUAL "${CMAKE_SOURCE_DIR}")
+    OPTION (BUILD_BENCHMARK "Build benchmark" OFF)
+    OPTION (BUILD_TESTS "Build tests" OFF)
+    OPTION (BUILD_SHARED_LIBS "Build shared libs" OFF)
+ENDIF ()
 OPTION (WITH_OPENSSL "Use OpenSSL for TLS connections" OFF)
 OPTION (WITH_SYSTEM_ABSEIL "Use system ABSEIL" OFF)
 OPTION (WITH_SYSTEM_LZ4 "Use system LZ4" OFF)
 OPTION (WITH_SYSTEM_CITYHASH "Use system cityhash" OFF)
+OPTION (WITH_SYSTEM_ZSTD "Use system ZSTD" OFF)
 OPTION (DEBUG_DEPENDENCIES "Print debug info about dependencies duting build" ON)
 OPTION (CHECK_VERSION "Check that version number corresponds to git tag, usefull in CI/CD to validate that new version published on GitHub has same version in sources" OFF)
+OPTION (DISABLE_CLANG_LIBC_WORKAROUND "Disable linking compiler-rt & gcc_s if using clang & libstdc++" OFF)
 
 PROJECT (CLICKHOUSE-CLIENT
     VERSION "${CLICKHOUSE_CPP_VERSION}"
@@ -93,6 +98,13 @@ ELSE ()
     SUBDIRS (contrib/cityhash/cityhash)
 ENDIF ()
 
+IF (WITH_SYSTEM_ZSTD)
+    FIND_PACKAGE(zstd REQUIRED)
+ELSE ()
+    INCLUDE_DIRECTORIES (contrib/zstd/zstd)
+    SUBDIRS (contrib/zstd/zstd)
+ENDIF ()
+
 SUBDIRS (
     clickhouse
 )
@@ -141,4 +153,5 @@ if(DEBUG_DEPENDENCIES)
     print_target_debug_info(absl::int128)
     print_target_debug_info(cityhash::cityhash)
     print_target_debug_info(lz4::lz4)
+    print_target_debug_info(zstd::zstd)
 endif()
